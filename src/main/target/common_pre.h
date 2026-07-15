@@ -297,6 +297,7 @@ extern uint8_t _dmaram_end__;
 #define USE_GYRO_SPI_ICM42688P
 #define USE_ACC_SPI_ICM42605
 #define USE_ACC_SPI_ICM42688P
+#define USE_ACCGYRO_ICM40608
 
 #if defined(STM32F405) || defined(STM32F745) || defined(STM32G4) || defined(STM32H7)
 #define USE_ACC_MPU6050

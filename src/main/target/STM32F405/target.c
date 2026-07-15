@@ -1,22 +1,105 @@
-/*
- * This file is part of Cleanflight and Betaflight.
- *
- * Cleanflight and Betaflight are free software. You can redistribute
- * this software and/or modify this software under the terms of the
- * GNU General Public License as published by the Free Software
- * Foundation, either version 3 of the License, or (at your option)
- * any later version.
- *
- * Cleanflight and Betaflight are distributed in the hope that they
- * will be useful, but WITHOUT ANY WARRANTY; without even the implied
- * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this software.
- *
- * If not, see <http://www.gnu.org/licenses/>.
- */
-
-// Needed to suppress the pedantic warning about an empty file
-#include <stddef.h>
+/* SPEEDYBEEF405V4 defaults based on the official unified target. */
+const char __attribute__((section(".custom_defaults"), used, aligned(4))) customDefaults[] =
+    "# Betaflight\n"
+    "board_name SPEEDYBEEF405V4\n"
+    "manufacturer_id SPBE\n"
+    "resource BEEPER 1 C15\n"
+    "resource MOTOR 1 B06\n"
+    "resource MOTOR 2 B07\n"
+    "resource MOTOR 3 B00\n"
+    "resource MOTOR 4 B01\n"
+    "resource MOTOR 5 C08\n"
+    "resource MOTOR 6 C09\n"
+    "resource MOTOR 7 B10\n"
+    "resource MOTOR 8 A15\n"
+    "resource PPM 1 A03\n"
+    "resource PWM 1 B15\n"
+    "resource LED_STRIP 1 A08\n"
+    "resource SERIAL_TX 1 A09\n"
+    "resource SERIAL_TX 2 A02\n"
+    "resource SERIAL_TX 3 C10\n"
+    "resource SERIAL_TX 4 A00\n"
+    "resource SERIAL_TX 6 C06\n"
+    "resource SERIAL_RX 1 A10\n"
+    "resource SERIAL_RX 2 A03\n"
+    "resource SERIAL_RX 3 C11\n"
+    "resource SERIAL_RX 4 A01\n"
+    "resource SERIAL_RX 5 D02\n"
+    "resource SERIAL_RX 6 C07\n"
+    "resource I2C_SCL 1 B08\n"
+    "resource I2C_SDA 1 B09\n"
+    "resource LED 1 C13\n"
+    "resource SPI_SCK 1 A05\n"
+    "resource SPI_SCK 2 B13\n"
+    "resource SPI_SCK 3 B03\n"
+    "resource SPI_MISO 1 A06\n"
+    "resource SPI_MISO 2 C02\n"
+    "resource SPI_MISO 3 B04\n"
+    "resource SPI_MOSI 1 A07\n"
+    "resource SPI_MOSI 2 C03\n"
+    "resource SPI_MOSI 3 B05\n"
+    "resource CAMERA_CONTROL 1 B14\n"
+    "resource ADC_BATT 1 C00\n"
+    "resource ADC_RSSI 1 C05\n"
+    "resource ADC_CURR 1 C01\n"
+    "resource SDCARD_CS 1 C14\n"
+    "resource PINIO 1 B11\n"
+    "resource OSD_CS 1 B12\n"
+    "resource GYRO_EXTI 1 C04\n"
+    "resource GYRO_CS 1 A04\n"
+    "timer B06 AF2\n"
+    "timer B07 AF2\n"
+    "timer B00 AF2\n"
+    "timer B01 AF2\n"
+    "timer C08 AF3\n"
+    "timer C09 AF3\n"
+    "timer B10 AF1\n"
+    "timer A15 AF1\n"
+    "timer B15 AF9\n"
+    "timer B14 AF9\n"
+    "timer A08 AF1\n"
+    "timer A03 AF3\n"
+    "dma SPI_MOSI 3 0\n"
+    "dma SPI_TX 3 0\n"
+    "dma ADC 1 0\n"
+    "dma pin B06 0\n"
+    "dma pin B07 0\n"
+    "dma pin B00 0\n"
+    "dma pin B01 0\n"
+    "dma pin C08 0\n"
+    "dma pin C09 0\n"
+    "dma pin B10 0\n"
+    "dma pin A15 0\n"
+    "dma pin A08 0\n"
+    "feature RX_SERIAL\n"
+    "feature TELEMETRY\n"
+    "feature OSD\n"
+    "serial 1 64 115200 57600 0 115200\n"
+    "serial 3 1 115200 57600 0 115200\n"
+    "serial 4 1024 115200 57600 0 115200\n"
+    "set mag_bustype = I2C\n"
+    "set mag_i2c_device = 1\n"
+    "set baro_bustype = I2C\n"
+    "set baro_i2c_device = 1\n"
+    "set serialrx_provider = CRSF\n"
+    "set blackbox_device = SDCARD\n"
+    "set dshot_burst = ON\n"
+    "set motor_pwm_protocol = DSHOT300\n"
+    "set current_meter = ADC\n"
+    "set battery_meter = ADC\n"
+    "set ibata_scale = 400\n"
+    "set beeper_inversion = ON\n"
+    "set beeper_od = OFF\n"
+    "set sdcard_detect_inverted = ON\n"
+    "set sdcard_mode = SPI\n"
+    "set sdcard_spi_bus = 3\n"
+    "set system_hse_mhz = 8\n"
+    "set max7456_spi_bus = 2\n"
+    "set dashboard_i2c_bus = 1\n"
+    "set pinio_config = 129,1,1,1\n"
+    "set pinio_box = 0,255,255,255\n"
+    "set gyro_1_bustype = SPI\n"
+    "set gyro_1_spibus = 1\n"
+    "set gyro_1_sensor_align = CW90\n"
+    "set gyro_1_align_yaw = 900\n"
+    "\0";
