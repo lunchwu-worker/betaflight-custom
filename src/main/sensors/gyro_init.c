@@ -34,6 +34,10 @@
 
 #include "config/config.h"
 
+#ifdef GYRO_LED_PIN
+#include "drivers/io.h"
+#endif
+
 #include "drivers/accgyro/accgyro.h"
 #include "drivers/accgyro/accgyro_virtual.h"
 #include "drivers/accgyro/accgyro_mpu.h"
@@ -785,6 +789,20 @@ bool gyroInit(void)
         gyro.sampleRateHz = 0;
         gyro.accSampleRateHz = 0;
     }
+
+#ifdef GYRO_LED_PIN
+    // Dedicated gyro status LED (board-specific). Reaching this point means at least
+    // one gyro was detected (gyroInit() returns false earlier otherwise). The LED is
+    // wired active-low (cathode to the MCU pin), so drive the pin low to light it.
+    {
+        IO_t gyroLed = IOGetByTag(IO_TAG(GYRO_LED_PIN));
+        if (gyroLed) {
+            IOInit(gyroLed, OWNER_LED, 0);
+            IOConfigGPIO(gyroLed, IOCFG_OUT_PP);
+            IOWrite(gyroLed, false);
+        }
+    }
+#endif
 
     return true;
 }

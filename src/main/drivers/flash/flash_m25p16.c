@@ -127,6 +127,9 @@ struct {
     // Winbond W25Q256
     // Datasheet: https://www.winbond.com/resource-files/w25q256jv%20spi%20revb%2009202016.pdf
     { 0xEF4019, 133, 50, 512, 256 },
+    // Cypress/Spansion S25FL116K (16 Mbit / 2 MB)
+    // Datasheet: https://www.infineon.com/dgdl/Infineon-S25FL116K_S25FL132K_S25FL164K_16_Mbit_32_Mbit_64_Mbit_3.0V_SPI_Flash_Memory-DataSheet-v07_00-EN.pdf
+    { 0x014015, 104, 50, 32, 256 },
     // Cypress S25FL064L
     // Datasheet: https://www.cypress.com/file/316661/download
     { 0x016017, 133, 50, 128, 256 },
