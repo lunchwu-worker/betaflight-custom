@@ -28,7 +28,7 @@
 
 #include "platform.h"
 
-#if defined(USE_GYRO_SPI_ICM42605) || defined(USE_GYRO_SPI_ICM42688P)
+#if defined(USE_GYRO_SPI_ICM42605) || defined(USE_GYRO_SPI_ICM42688P) || defined(USE_ACCGYRO_ICM40608)
 
 #include "common/axis.h"
 #include "common/utils.h"
@@ -43,7 +43,6 @@
 #include "drivers/pwm_output.h"
 #include "drivers/sensor.h"
 #include "drivers/time.h"
-#include "drivers/pwm_output.h"
 
 #include "sensors/gyro.h"
 #include "pg/gyrodev.h"
@@ -270,6 +269,9 @@ uint8_t icm426xxSpiDetect(const extDevice_t *dev)
         case ICM42688P_WHO_AM_I_CONST:
             icmDetected = ICM_42688P_SPI;
             break;
+        case ICM40608_WHO_AM_I_CONST:
+            icmDetected = ICM_40608_SPI;
+            break;
         default:
             icmDetected = MPU_NONE;
             break;
@@ -296,6 +298,8 @@ bool icm426xxSpiAccDetect(accDev_t *acc)
     case ICM_42605_SPI:
         break;
     case ICM_42688P_SPI:
+        break;
+    case ICM_40608_SPI:
         break;
     default:
         return false;
@@ -404,6 +408,8 @@ bool icm426xxSpiGyroDetect(gyroDev_t *gyro)
         break;
     case ICM_42688P_SPI:
         break;
+    case ICM_40608_SPI:
+        break;
     default:
         return false;
     }
@@ -420,6 +426,7 @@ static aafConfig_t getGyroAafConfig(const mpuSensor_e gyroModel, const aafConfig
 {
     switch (gyroModel){
     case ICM_42605_SPI:
+    case ICM_40608_SPI:
         switch (config) {
         case GYRO_HARDWARE_LPF_NORMAL:
             return aafLUT42605[AAF_CONFIG_258HZ];
@@ -450,4 +457,4 @@ static aafConfig_t getGyroAafConfig(const mpuSensor_e gyroModel, const aafConfig
     }
 }
 
-#endif // USE_GYRO_SPI_ICM42605 || USE_GYRO_SPI_ICM42688P
+#endif // USE_GYRO_SPI_ICM42605 || USE_GYRO_SPI_ICM42688P || USE_ACCGYRO_ICM40608
