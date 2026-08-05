@@ -21,6 +21,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifndef PINIO_COUNT
 #define PINIO_COUNT 4
@@ -34,3 +35,6 @@ struct pinioConfig_s;
 
 void pinioInit(const struct pinioConfig_s *pinioConfig);
 void pinioSet(int index, bool on);
+#if defined(PINIO1_VBAT_ENABLE_THRESHOLD) || defined(PINIO2_VBAT_ENABLE_THRESHOLD)
+void pinioSetVbat(uint16_t vbat);
+#endif

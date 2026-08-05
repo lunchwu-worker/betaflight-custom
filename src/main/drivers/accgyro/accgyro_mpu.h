@@ -221,6 +221,7 @@ typedef enum {
     L3GD20_SPI,
     LSM6DSV16X_SPI,
     LSM6DSK320X_SPI,
+    SCH16T_SPI,
     ICM_45605_SPI,
     ICM_45686_SPI,
     ICM_40609_SPI,

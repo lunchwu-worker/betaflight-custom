@@ -60,6 +60,7 @@ typedef enum {
     ACC_ICM40608,
     ACC_SCS3304,
     ACC_SCS3302,
+    ACC_SCH16T,
     ACC_VIRTUAL
 } accelerationSensor_e;
 

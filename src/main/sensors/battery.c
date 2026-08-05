@@ -35,6 +35,9 @@
 #include "config/feature.h"
 
 #include "drivers/adc.h"
+#if defined(PINIO1_VBAT_ENABLE_THRESHOLD) || defined(PINIO2_VBAT_ENABLE_THRESHOLD)
+#include "drivers/pinio.h"
+#endif
 
 #include "fc/runtime_config.h"
 #include "fc/rc_controls.h"
@@ -161,6 +164,10 @@ void batteryUpdateVoltage(timeUs_t currentTimeUs)
             voltageMeterReset(&voltageMeter);
             break;
     }
+
+#if defined(PINIO1_VBAT_ENABLE_THRESHOLD) || defined(PINIO2_VBAT_ENABLE_THRESHOLD)
+    pinioSetVbat(voltageMeter.unfiltered);
+#endif
 
     voltageStableUpdate(&voltageMeter);
 

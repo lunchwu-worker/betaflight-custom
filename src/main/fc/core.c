@@ -483,6 +483,7 @@ if (crashFlipModeActive) {
 
         warningLedUpdate();
     }
+
 }
 
 void disarm(flightLogDisarmReason_e reason)

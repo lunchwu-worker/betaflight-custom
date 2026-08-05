@@ -339,6 +339,9 @@ sensor_gyro_unittest_SRC := \
 		$(USER_DIR)/pg/pg.c \
 		$(USER_DIR)/pg/gyrodev.c
 
+sch16t_unittest_SRC := \
+		$(USER_DIR)/drivers/accgyro/accgyro_spi_sch16t.c
+
 telemetry_crsf_unittest_SRC := \
 		$(USER_DIR)/rx/crsf.c \
 		$(USER_DIR)/telemetry/crsf.c \

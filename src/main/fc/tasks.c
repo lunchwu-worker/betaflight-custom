@@ -96,6 +96,7 @@
 #include "sensors/compass.h"
 #include "sensors/esc_sensor.h"
 #include "sensors/gyro.h"
+#include "sensors/gyro_init.h"
 #include "sensors/sensors.h"
 #include "sensors/rangefinder.h"
 #include "sensors/opticalflow.h"
@@ -147,6 +148,10 @@ static void taskHandleSerial(timeUs_t currentTimeUs)
 
 static void taskBatteryAlerts(timeUs_t currentTimeUs)
 {
+#if defined(GYRO_LED_PIN) && defined(GYRO_LED_BLINK)
+    gyroLedUpdate(currentTimeUs);
+#endif
+
     if (!ARMING_FLAG(ARMED)) {
         // the battery *might* fall out in flight, but if that happens the FC will likely be off too unless the user has battery backup.
         batteryUpdatePresence();

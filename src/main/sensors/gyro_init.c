@@ -36,6 +36,7 @@
 
 #ifdef GYRO_LED_PIN
 #include "drivers/io.h"
+#include "drivers/time.h"
 #endif
 
 #include "drivers/accgyro/accgyro.h"
@@ -58,6 +59,9 @@
 #include "drivers/accgyro/accgyro_spi_l3gd20.h"
 #include "drivers/accgyro/accgyro_spi_lsm6dso.h"
 #include "drivers/accgyro/accgyro_spi_lsm6dsv16x.h"
+#if defined(USE_ACCGYRO_SCH16T)
+#include "drivers/accgyro/accgyro_spi_sch16t.h"
+#endif
 
 #include "drivers/accgyro/accgyro_spi_mpu6000.h"
 #include "drivers/accgyro/accgyro_spi_mpu6500.h"
@@ -319,6 +323,7 @@ void gyroInitSensor(gyroSensor_t *gyroSensor, const gyroDeviceConfig_t *config)
     case GYRO_LSM6DSK320X:
     case GYRO_SCS3304:
     case GYRO_SCS3302:
+    case GYRO_SCH16T:
     case GYRO_ICM42688P:
     case GYRO_IIM42652:
     case GYRO_IIM42653:
@@ -551,6 +556,15 @@ STATIC_UNIT_TESTED gyroHardware_e gyroDetect(gyroDev_t *dev)
     case GYRO_SCS3302:
         if (scs3302SpiGyroDetect(dev)) {
             gyroHardware = GYRO_SCS3302;
+            break;
+        }
+        FALLTHROUGH;
+#endif
+
+#if defined(USE_ACCGYRO_SCH16T)
+    case GYRO_SCH16T:
+        if (sch16tSpiGyroDetect(dev)) {
+            gyroHardware = GYRO_SCH16T;
             break;
         }
         FALLTHROUGH;
@@ -793,19 +807,46 @@ bool gyroInit(void)
 #ifdef GYRO_LED_PIN
     // Dedicated gyro status LED (board-specific). Reaching this point means at least
     // one gyro was detected (gyroInit() returns false earlier otherwise). The LED is
-    // wired active-low (cathode to the MCU pin), so drive the pin low to light it.
+    // wired active-low (cathode to the MCU pin).
     {
         IO_t gyroLed = IOGetByTag(IO_TAG(GYRO_LED_PIN));
         if (gyroLed) {
-            IOInit(gyroLed, OWNER_LED, 0);
+            IOInit(gyroLed, OWNER_LED, RESOURCE_INDEX(1));
             IOConfigGPIO(gyroLed, IOCFG_OUT_PP);
+#ifdef GYRO_LED_BLINK
+            // Leave off until calibration completes; gyroLedUpdate() then blinks at 1 Hz.
+            IOWrite(gyroLed, true);
+#else
             IOWrite(gyroLed, false);
+#endif
         }
     }
 #endif
 
     return true;
 }
+
+#ifdef GYRO_LED_PIN
+#ifdef GYRO_LED_BLINK
+void gyroLedUpdate(timeUs_t currentTimeUs)
+{
+    IO_t gyroLed = IOGetByTag(IO_TAG(GYRO_LED_PIN));
+    if (!gyroLed) {
+        return;
+    }
+
+    // Active-low: write false to light the LED.
+    if (!gyroIsCalibrationComplete()) {
+        IOWrite(gyroLed, true);
+        return;
+    }
+
+    // One short indication every second: 200 ms on, 800 ms off.
+    const bool ledOn = (currentTimeUs % 1000000U) < 200000U;
+    IOWrite(gyroLed, !ledOn);
+}
+#endif
+#endif
 
 uint8_t getGyroDetectedFlags(void)
 {
