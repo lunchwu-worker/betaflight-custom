@@ -665,6 +665,18 @@ RAM_CODE static bool mspSrcIsVtxPort(mspDescriptor_t srcDesc)
 #endif
 }
 
+// Phone apps on the Bluetooth port refuse API 1.48 / 2026.x; report the 2025.12 identity there only.
+RAM_CODE static bool mspSrcIsLegacyApiPort(mspDescriptor_t srcDesc)
+{
+#ifdef MSP_LEGACY_API_UART
+    return srcDesc == getMspSerialPortDescriptor(MSP_LEGACY_API_UART);
+#else
+    UNUSED(srcDesc);
+
+    return false;
+#endif
+}
+
 /*
  * Returns true if the command was processd, false otherwise.
  * May set mspPostProcessFunc to a function to be called once the command has been processed
@@ -677,7 +689,7 @@ RAM_CODE static bool mspCommonProcessOutCommand(mspDescriptor_t srcDesc, int16_t
     case MSP_API_VERSION:
         sbufWriteU8(dst, MSP_PROTOCOL_VERSION);
         sbufWriteU8(dst, API_VERSION_MAJOR);
-        sbufWriteU8(dst, API_VERSION_MINOR);
+        sbufWriteU8(dst, mspSrcIsLegacyApiPort(srcDesc) ? 47 : API_VERSION_MINOR);
         break;
 
     case MSP_FC_VARIANT:
@@ -685,6 +697,13 @@ RAM_CODE static bool mspCommonProcessOutCommand(mspDescriptor_t srcDesc, int16_t
         break;
 
     case MSP_FC_VERSION:
+        if (mspSrcIsLegacyApiPort(srcDesc)) {
+            sbufWriteU8(dst, 25);
+            sbufWriteU8(dst, 12);
+            sbufWriteU8(dst, 1);
+            sbufWritePString(dst, "2025.12.1");
+            break;
+        }
         sbufWriteU8(dst, (uint8_t)(FC_VERSION_YEAR - FC_CALVER_BASE_YEAR)); // year since 2000
         sbufWriteU8(dst, FC_VERSION_MONTH);
         sbufWriteU8(dst, FC_VERSION_PATCH_LEVEL);
@@ -1532,8 +1551,10 @@ case MSP_NAME:
             sbufWriteU8(dst, adjRange->range.endStep);
             sbufWriteU8(dst, adjRange->adjustmentConfig);
             sbufWriteU8(dst, adjRange->auxSwitchChannelIndex);
-            sbufWriteU16(dst, adjRange->adjustmentCenter);
-            sbufWriteU16(dst, adjRange->adjustmentScale);
+            if (!mspSrcIsLegacyApiPort(srcDesc)) {
+                sbufWriteU16(dst, adjRange->adjustmentCenter);
+                sbufWriteU16(dst, adjRange->adjustmentScale);
+            }
         }
         break;
 
