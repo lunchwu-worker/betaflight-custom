@@ -447,7 +447,7 @@ STATIC_UNIT_TESTED gyroHardware_e gyroDetect(gyroDev_t *dev)
         FALLTHROUGH;
 #endif
 
-#if defined(USE_GYRO_SPI_ICM42605) || defined(USE_ACCGYRO_ICM42622P) || defined(USE_ACCGYRO_ICM42686P) || defined(USE_GYRO_SPI_ICM42688P) || defined(USE_ACCGYRO_IIM42652) || defined(USE_ACCGYRO_IIM42653)
+#if defined(USE_GYRO_SPI_ICM42605) || defined(USE_ACCGYRO_ICM42622P) || defined(USE_ACCGYRO_ICM42686P) || defined(USE_GYRO_SPI_ICM42688P) || defined(USE_ACCGYRO_IIM42652) || defined(USE_ACCGYRO_IIM42653) || defined(USE_ACCGYRO_ICM40608)
     case GYRO_ICM42605:
     case GYRO_ICM42622P:
     case GYRO_ICM42688P:
@@ -473,6 +473,10 @@ STATIC_UNIT_TESTED gyroHardware_e gyroDetect(gyroDev_t *dev)
                 break;
             case IIM_42653_SPI:
                 gyroHardware = GYRO_IIM42653;
+                break;
+            case ICM_40608_SPI:
+                // 调参器不认识 ICM40608，按同系列 ICM40609D 显示
+                gyroHardware = GYRO_ICM40609D;
                 break;
             default:
                 gyroHardware = GYRO_NONE;
