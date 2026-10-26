@@ -640,18 +640,10 @@ static bool mspCommonProcessOutCommand(int16_t cmdMSP, sbuf_t *dst, mspPostProce
         break;
 
     case MSP_FC_VERSION:
-#ifdef MSP_REPORT_FC_VERSION_YEAR
-        // Board-specific displayed version; MSP API stays at API_VERSION_MINOR.
-        sbufWriteU8(dst, (uint8_t)(MSP_REPORT_FC_VERSION_YEAR - FC_CALVER_BASE_YEAR));
-        sbufWriteU8(dst, MSP_REPORT_FC_VERSION_MONTH);
-        sbufWriteU8(dst, MSP_REPORT_FC_VERSION_PATCH_LEVEL);
-        sbufWritePString(dst, STR(MSP_REPORT_FC_VERSION_YEAR) "." STR(MSP_REPORT_FC_VERSION_MONTH) "." STR(MSP_REPORT_FC_VERSION_PATCH_LEVEL));
-#else
         sbufWriteU8(dst, (uint8_t)(FC_VERSION_YEAR - FC_CALVER_BASE_YEAR)); // year since 2000
         sbufWriteU8(dst, FC_VERSION_MONTH);
         sbufWriteU8(dst, FC_VERSION_PATCH_LEVEL);
         sbufWritePString(dst, FC_VERSION_STRING);
-#endif
         break;
 
     case MSP2_MCU_INFO: {
