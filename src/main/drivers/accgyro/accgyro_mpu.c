@@ -36,8 +36,6 @@
 #include "drivers/bus_i2c.h"
 #include "drivers/bus_spi.h"
 #include "drivers/exti.h"
-
-#include "fc/runtime_config.h"
 #include "drivers/io.h"
 #include "drivers/nvic.h"
 #include "drivers/sensor.h"
@@ -326,12 +324,6 @@ bool mpuGyroReadSPI(gyroDev_t *gyro)
         gyro->gyroADCRaw[X] = __builtin_bswap16(gyroData[1]);
         gyro->gyroADCRaw[Y] = __builtin_bswap16(gyroData[2]);
         gyro->gyroADCRaw[Z] = __builtin_bswap16(gyroData[3]);
-
-        // EXTI may start after the one-shot check at first read (slow gyro/CLKIN start-up);
-        // re-evaluate once enough interrupts arrive, but never switch mode while armed.
-        if (gyro->gyroModeSPI == GYRO_EXTI_NO_INT && gyro->detectedEXTI > GYRO_EXTI_DETECT_THRESHOLD && !ARMING_FLAG(ARMED)) {
-            gyro->gyroModeSPI = GYRO_EXTI_INIT;
-        }
         break;
     }
 
