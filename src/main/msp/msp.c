@@ -665,7 +665,7 @@ RAM_CODE static bool mspSrcIsVtxPort(mspDescriptor_t srcDesc)
 #endif
 }
 
-// Phone apps on the Bluetooth port refuse API 1.48 / 2026.x; report the 2025.12 identity there only.
+// Phone apps on the Bluetooth port refuse MSP API 1.48; report API 1.47 (and 1.47 reply layouts) there only.
 RAM_CODE static bool mspSrcIsLegacyApiPort(mspDescriptor_t srcDesc)
 {
 #ifdef MSP_LEGACY_API_UART
@@ -697,13 +697,6 @@ RAM_CODE static bool mspCommonProcessOutCommand(mspDescriptor_t srcDesc, int16_t
         break;
 
     case MSP_FC_VERSION:
-        if (mspSrcIsLegacyApiPort(srcDesc)) {
-            sbufWriteU8(dst, 25);
-            sbufWriteU8(dst, 12);
-            sbufWriteU8(dst, 1);
-            sbufWritePString(dst, "2025.12.1");
-            break;
-        }
         sbufWriteU8(dst, (uint8_t)(FC_VERSION_YEAR - FC_CALVER_BASE_YEAR)); // year since 2000
         sbufWriteU8(dst, FC_VERSION_MONTH);
         sbufWriteU8(dst, FC_VERSION_PATCH_LEVEL);
