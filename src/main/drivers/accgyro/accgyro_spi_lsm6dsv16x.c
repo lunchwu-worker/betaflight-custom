@@ -24,10 +24,11 @@
 
 #include "platform.h"
 
-#if defined(USE_ACCGYRO_LSM6DSV16X) || defined(USE_ACCGYRO_LSM6DSK320X)
+#if defined(USE_ACCGYRO_LSM6DSV16X) || defined(USE_ACCGYRO_LSM6DSK320X) || defined(USE_ACCGYRO_SCS3304) || defined(USE_ACCGYRO_SCS3302)
 
 #include "accgyro_spi_lsm6dsv16x.h"
 
+#include "drivers/time.h"
 #include "sensors/gyro.h"
 #include "drivers/time.h"
 
@@ -320,16 +321,26 @@
 #define LSM6DSV_CTRL6_LPF1_G_BW_MASK                    0x70 // See table 64
 #define LSM6DSV_CTRL6_LPF1_G_BW_SHIFT                   4
 
-// Gyro LPF1 + LPF2 bandwidth selection when ODR=7.68kHz
-// Note that these figures were advised by STmicro tech support and differ from the datasheet
-#define LSM6DSV_CTRL6_FS_G_BW_288HZ                     0
-#define LSM6DSV_CTRL6_FS_G_BW_215HZ                     1
-#define LSM6DSV_CTRL6_FS_G_BW_157HZ                     2
-#define LSM6DSV_CTRL6_FS_G_BW_455HZ                     3
-#define LSM6DSV_CTRL6_FS_G_BW_102HZ                     4
-#define LSM6DSV_CTRL6_FS_G_BW_58HZ                      5
-#define LSM6DSV_CTRL6_FS_G_BW_28_8HZ                    6
-#define LSM6DSV_CTRL6_FS_G_BW_14_4HZ                    7
+// Gyro LPF1 + LPF2 bandwidth selection (LPF1_G_BW_[2:0])
+// Bandwidth values from datasheet Table 64 at different ODRs:
+//   Value |  480Hz |  960Hz | 1.92kHz | 3.84kHz | 7.68kHz | ~8kHz(HAODR1)
+//   ------+--------+--------+---------+---------+---------+--------------
+//     0   |  175   |  241   |   273   |   280   |   281   |   ~293
+//     1   |  157   |  195   |   210   |   213   |   213   |   ~222
+//     2   |  131   |  149   |   155   |   156   |   156   |   ~162
+//     3   |  188   |  310   |   387   |   403   |   407   |   ~424
+//     4   |   94   |  100   |   101   |   102   |   102   |   ~106
+//     5   |  56.7  |  57.9  |   58.2  |   58.3  |    58   |   ~60
+//     6   |  28.4  |  28.7  |   28.8  |   28.8  |   28.8  |   ~30
+//     7   |  14.3  |  14.4  |   14.4  |   14.4  |   14.4  |   ~15
+#define LSM6DSV_CTRL6_LPF1_G_BW_0                       0   // Widest: ~281Hz @7.68kHz, ~293Hz @8kHz
+#define LSM6DSV_CTRL6_LPF1_G_BW_1                       1   // ~213Hz @7.68kHz, ~222Hz @8kHz
+#define LSM6DSV_CTRL6_LPF1_G_BW_2                       2   // ~156Hz @7.68kHz, ~162Hz @8kHz
+#define LSM6DSV_CTRL6_LPF1_G_BW_3                       3   // Wider: ~407Hz @7.68kHz, ~424Hz @8kHz
+#define LSM6DSV_CTRL6_LPF1_G_BW_4                       4   // ~102Hz @7.68kHz, ~106Hz @8kHz
+#define LSM6DSV_CTRL6_LPF1_G_BW_5                       5   // ~58Hz @7.68kHz, ~60Hz @8kHz
+#define LSM6DSV_CTRL6_LPF1_G_BW_6                       6   // ~28.8Hz @7.68kHz, ~30Hz @8kHz
+#define LSM6DSV_CTRL6_LPF1_G_BW_7                       7   // Narrowest: ~14.4Hz @7.68kHz, ~15Hz @8kHz
 
 #define LSM6DSV_CTRL6_FS_G_MASK                         0x0f
 #define LSM6DSV_CTRL6_FS_G_SHIFT                        0
@@ -338,7 +349,7 @@
 #define LSM6DSV_CTRL6_FS_G_500DPS                       0x02
 #define LSM6DSV_CTRL6_FS_G_1000DPS                      0x03
 #define LSM6DSV_CTRL6_FS_G_2000DPS                      0x04
-#define LSM6DSV_CTRL6_FS_G_4000DPS                      0x0c
+#define LSM6DSV_CTRL6_FS_G_4000DPS                      0xc0
 
 // Control register 7 (R/W)
 #define LSM6DSV_CTRL7                       0x16
@@ -884,7 +895,12 @@ static void lsm6dsv16xAccInit(accDev_t *acc)
     acc->acc_1G = 512 * 4;
 }
 
-static bool lsm6dsv16xAccReadSPI(accDev_t *acc)
+static inline int16_t lsm6dsv16xDecodeSample(const uint8_t *buf)
+{
+    return (int16_t)((((uint16_t)buf[1]) << 8) | buf[0]);
+}
+
+static FAST_CODE bool lsm6dsv16xAccReadSPI(accDev_t *acc)
 {
     switch (acc->gyro->gyroModeSPI) {
     case GYRO_EXTI_INT:
@@ -904,11 +920,10 @@ static bool lsm6dsv16xAccReadSPI(accDev_t *acc)
         // Wait for completion
         spiWait(&acc->gyro->dev);
 
-        int16_t *accData = (int16_t *)acc->gyro->dev.rxBuf;
-
-        acc->ADCRaw[X] = accData[1];
-        acc->ADCRaw[Y] = accData[2];
-        acc->ADCRaw[Z] = accData[3];
+        const uint8_t *rx = &acc->gyro->dev.rxBuf[1]; // rx[0] = dummy read per datasheet §5.1 (SPI)
+        acc->ADCRaw[X] = lsm6dsv16xDecodeSample(&rx[1]);
+        acc->ADCRaw[Y] = lsm6dsv16xDecodeSample(&rx[3]);
+        acc->ADCRaw[Z] = lsm6dsv16xDecodeSample(&rx[5]);
         break;
     }
 
@@ -918,11 +933,10 @@ static bool lsm6dsv16xAccReadSPI(accDev_t *acc)
         // up an old value.
 
         // This data was read from the gyro, which is the same SPI device as the acc
-        int16_t *accData = (int16_t *)acc->gyro->dev.rxBuf;
-
-        acc->ADCRaw[X] = accData[4];
-        acc->ADCRaw[Y] = accData[5];
-        acc->ADCRaw[Z] = accData[6];
+        const uint8_t *rx = &acc->gyro->dev.rxBuf[1];
+        acc->ADCRaw[X] = lsm6dsv16xDecodeSample(&rx[7]);  // 0=dummy, 1..6=gyro, 7..12=acc data (OUTX/Y/Z_A)
+        acc->ADCRaw[Y] = lsm6dsv16xDecodeSample(&rx[9]);
+        acc->ADCRaw[Z] = lsm6dsv16xDecodeSample(&rx[11]);
         break;
     }
 
@@ -963,11 +977,11 @@ static void lsm6dsk320xGyroInit(gyroDev_t *gyro)
     const extDevice_t *dev = &gyro->dev;
     // Set default LPF1 filter bandwidth to be as close as possible to MPU6000's 250Hz cutoff
     uint8_t lsm6dsk320xLPF1BandwidthOptions[GYRO_HARDWARE_LPF_COUNT] = {
-            [GYRO_HARDWARE_LPF_NORMAL] = LSM6DSV_CTRL6_FS_G_BW_288HZ,
-            [GYRO_HARDWARE_LPF_OPTION_1] = LSM6DSV_CTRL6_FS_G_BW_157HZ,
-            [GYRO_HARDWARE_LPF_OPTION_2] = LSM6DSV_CTRL6_FS_G_BW_215HZ,
+            [GYRO_HARDWARE_LPF_NORMAL] = LSM6DSV_CTRL6_LPF1_G_BW_0,       // ~293Hz @8kHz
+            [GYRO_HARDWARE_LPF_OPTION_1] = LSM6DSV_CTRL6_LPF1_G_BW_2,     // ~162Hz @8kHz
+            [GYRO_HARDWARE_LPF_OPTION_2] = LSM6DSV_CTRL6_LPF1_G_BW_1,     // ~222Hz @8kHz
 #ifdef USE_GYRO_DLPF_EXPERIMENTAL
-            [GYRO_HARDWARE_LPF_EXPERIMENTAL] = LSM6DSV_CTRL6_FS_G_BW_455HZ
+            [GYRO_HARDWARE_LPF_EXPERIMENTAL] = LSM6DSV_CTRL6_LPF1_G_BW_3  // ~424Hz @8kHz
 #endif
     };
 
@@ -1052,12 +1066,13 @@ static void lsm6dsv16xGyroInit(gyroDev_t *gyro)
 {
     const extDevice_t *dev = &gyro->dev;
     // Set default LPF1 filter bandwidth to be as close as possible to MPU6000's 250Hz cutoff
+    // At 8kHz ODR (HAODR mode 1): NORMAL~293Hz, OPTION_1~162Hz, OPTION_2~222Hz, EXPERIMENTAL~424Hz
     uint8_t lsm6dsv16xLPF1BandwidthOptions[GYRO_HARDWARE_LPF_COUNT] = {
-            [GYRO_HARDWARE_LPF_NORMAL] = LSM6DSV_CTRL6_FS_G_BW_288HZ,
-            [GYRO_HARDWARE_LPF_OPTION_1] = LSM6DSV_CTRL6_FS_G_BW_157HZ,
-            [GYRO_HARDWARE_LPF_OPTION_2] = LSM6DSV_CTRL6_FS_G_BW_215HZ,
+            [GYRO_HARDWARE_LPF_NORMAL] = LSM6DSV_CTRL6_LPF1_G_BW_0,       // ~293Hz @8kHz (closest to MPU6000's 250Hz)
+            [GYRO_HARDWARE_LPF_OPTION_1] = LSM6DSV_CTRL6_LPF1_G_BW_2,     // ~162Hz @8kHz
+            [GYRO_HARDWARE_LPF_OPTION_2] = LSM6DSV_CTRL6_LPF1_G_BW_1,     // ~222Hz @8kHz
 #ifdef USE_GYRO_DLPF_EXPERIMENTAL
-            [GYRO_HARDWARE_LPF_EXPERIMENTAL] = LSM6DSV_CTRL6_FS_G_BW_455HZ
+            [GYRO_HARDWARE_LPF_EXPERIMENTAL] = LSM6DSV_CTRL6_LPF1_G_BW_3  // ~424Hz @8kHz (widest)
 #endif
     };
 
@@ -1072,11 +1087,11 @@ static void lsm6dsv16xGyroInit(gyroDev_t *gyro)
         delay(1);
     }
 
-    // Gyro turn-on time is 30ms (datasheet)
+    // Wait for device to stabilize after reset (datasheet says gyro needs 30ms turn-on time)
     delay(35);
 
     // Autoincrement register address when doing block SPI reads and update continuously
-    spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_IF_INC | LSM6DSV_CTRL3_BDU);      /*BDU bit need to be set*/
+    spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_IF_INC | LSM6DSV_CTRL3_BDU);
 
     // Select high-accuracy ODR mode 1
     spiWriteReg(dev, LSM6DSV_HAODR_CFG,
@@ -1084,35 +1099,19 @@ static void lsm6dsv16xGyroInit(gyroDev_t *gyro)
                                     LSM6DSV_HAODR_CFG_HAODR_SEL_MASK,
                                     LSM6DSV_HAODR_CFG_HAODR_SEL_SHIFT));
 
-    // Enable the accelerometer in high accuracy
-    spiWriteReg(dev, LSM6DSV_CTRL1,
-                LSM6DSV_ENCODE_BITS(LSM6DSV_CTRL1_OP_MODE_XL_HIGH_ACCURACY,
-                                    LSM6DSV_CTRL1_OP_MODE_XL_MASK,
-                                    LSM6DSV_CTRL1_OP_MODE_XL_SHIFT));
-
-    // Enable the gyro in high accuracy
-    spiWriteReg(dev, LSM6DSV_CTRL2,
-                LSM6DSV_ENCODE_BITS(LSM6DSV_CTRL2_OP_MODE_G_HIGH_ACCURACY,
-                                    LSM6DSV_CTRL2_OP_MODE_G_MASK,
-                                    LSM6DSV_CTRL2_OP_MODE_G_SHIFT));
-
-    // Enable 16G sensitivity
+    // Set accelerometer: 16G full scale
     spiWriteReg(dev, LSM6DSV_CTRL8,
                 LSM6DSV_ENCODE_BITS(LSM6DSV_CTRL8_FS_XL_16G,
                                     LSM6DSV_CTRL8_FS_XL_MASK,
                                     LSM6DSV_CTRL8_FS_XL_SHIFT));
 
-    // Enable the accelerometer odr at 1kHz
-    spiWriteReg(dev, LSM6DSV_CTRL1,
-                LSM6DSV_ENCODE_BITS(LSM6DSV_CTRL1_ODR_XL_1000HZ,
-                                    LSM6DSV_CTRL1_ODR_XL_MASK,
-                                    LSM6DSV_CTRL1_ODR_XL_SHIFT));
+    // Configure accelerometer: HIGH_ACCURACY mode + 1kHz ODR in single write
+    // CTRL1 = (OP_MODE_XL << 4) | ODR_XL = (1 << 4) | 9 = 0x19
+    spiWriteReg(dev, LSM6DSV_CTRL1, 0x19);
 
-    // Enable the gyro odr at 8kHz
-    spiWriteReg(dev, LSM6DSV_CTRL2,
-                LSM6DSV_ENCODE_BITS(LSM6DSV_CTRL2_ODR_G_8000HZ,
-                                    LSM6DSV_CTRL2_ODR_G_MASK,
-                                    LSM6DSV_CTRL2_ODR_G_SHIFT));
+    // Configure gyroscope: HIGH_ACCURACY mode + 8kHz ODR in single write
+    // CTRL2 = (OP_MODE_G << 4) | ODR_G = (1 << 4) | 12 = 0x1C
+    spiWriteReg(dev, LSM6DSV_CTRL2, 0x1C);
 
     // Enable 2000 deg/s sensitivity and selected LPF1 filter setting
     // Set the LPF1 filter bandwidth
@@ -1139,9 +1138,8 @@ static void lsm6dsv16xGyroInit(gyroDev_t *gyro)
     mpuGyroInit(gyro);
 }
 
-static bool lsm6dsv16xGyroReadSPI(gyroDev_t *gyro)
+static FAST_CODE bool lsm6dsv16xGyroReadSPI(gyroDev_t *gyro)
 {
-    int16_t *gyroData = (int16_t *)gyro->dev.rxBuf;
     switch (gyro->gyroModeSPI) {
     case GYRO_EXTI_INIT:
     {
@@ -1157,7 +1155,7 @@ static bool lsm6dsv16xGyroReadSPI(gyroDev_t *gyro)
             if (spiUseDMA(&gyro->dev)) {
                 gyro->dev.callbackArg = (uintptr_t)gyro;
                 gyro->dev.txBuf[0] = LSM6DSV_OUTX_L_G | 0x80;
-                // Read three words of gyro data immediately followed by three bytes of acc data
+                // Read three words of gyro data immediately followed by three words (6 bytes) of acc data
                 gyro->segments[0].len = sizeof(uint8_t) + 6 * sizeof(int16_t);
                 gyro->segments[0].callback = mpuIntCallback;
                 gyro->segments[0].u.buffers.txData = gyro->dev.txBuf;
@@ -1193,9 +1191,10 @@ static bool lsm6dsv16xGyroReadSPI(gyroDev_t *gyro)
         // Wait for completion
         spiWait(&gyro->dev);
 
-        gyro->gyroADCRaw[X] = gyroData[1];
-        gyro->gyroADCRaw[Y] = gyroData[2];
-        gyro->gyroADCRaw[Z] = gyroData[3];
+        const uint8_t *rx = &gyro->dev.rxBuf[1]; // rx[0] = dummy read per datasheet §5.1 (SPI)
+        gyro->gyroADCRaw[X] = lsm6dsv16xDecodeSample(&rx[1]);
+        gyro->gyroADCRaw[Y] = lsm6dsv16xDecodeSample(&rx[3]);
+        gyro->gyroADCRaw[Z] = lsm6dsv16xDecodeSample(&rx[5]);
         break;
     }
 
@@ -1203,9 +1202,10 @@ static bool lsm6dsv16xGyroReadSPI(gyroDev_t *gyro)
     {
         // If read was triggered in interrupt don't bother waiting. The worst that could happen is that we pick
         // up an old value.
-        gyro->gyroADCRaw[X] = gyroData[1];
-        gyro->gyroADCRaw[Y] = gyroData[2];
-        gyro->gyroADCRaw[Z] = gyroData[3];
+        const uint8_t *rx = &gyro->dev.rxBuf[1]; // rx[0] = dummy read per datasheet §5.1 (SPI)
+        gyro->gyroADCRaw[X] = lsm6dsv16xDecodeSample(&rx[1]);
+        gyro->gyroADCRaw[Y] = lsm6dsv16xDecodeSample(&rx[3]);
+        gyro->gyroADCRaw[Z] = lsm6dsv16xDecodeSample(&rx[5]);
         break;
     }
 
@@ -1240,4 +1240,237 @@ bool lsm6dsk320xSpiGyroDetect(gyroDev_t *gyro)
     return true;
 }
 
-#endif // USE_ACCGYRO_LSM6DSV16X || USE_ACCGYRO_LSM6DSK320X
+#ifdef USE_ACCGYRO_SCS3304
+
+#define SCS3304_WHO_AM_I_CONST (0x6B)
+
+uint8_t scs3304SpiDetect(const extDevice_t *dev)
+{
+    const uint8_t whoAmI = spiReadRegMsk(dev, LSM6DSV_WHO_AM_I);
+
+    if (whoAmI != SCS3304_WHO_AM_I_CONST) {
+        return MPU_NONE;
+    }
+
+    return SCS3304_SPI;
+}
+
+// ASM330LHH register layout (LSM6DSO-style) — completely different from LSM6DSV16X:
+//   CTRL1_XL (10h): [7:4]=ODR_XL, [3:2]=FS_XL, [1]=LPF2_XL_EN, [0]=0
+//     FS_XL: 00=±2g, 01=±16g(!), 10=±4g, 11=±8g (non-monotonic)
+//   CTRL2_G  (11h): [7:4]=ODR_G, [3:2]=FS_G, [1]=FS_125, [0]=FS_4000
+//     FS_G: 00=±250, 01=±500, 10=±1000, 11=±2000 dps
+//   CTRL4_C  (13h): [1]=LPF1_SEL_G (gyro LPF1 enable — NOT in CTRL7!)
+//   CTRL6_G  (15h): [2:0]=FTYPE (LPF1 BW — NOT in bits[6:4]! No FS_G here!)
+//   CTRL8_XL (17h): accel HP/LPF2 config only (NO FS_XL bits!)
+//   COUNTER_BDR_REG1 (0Bh): [7]=dataready_pulsed (NOT in CTRL4!)
+
+static void scs3304GyroInit(gyroDev_t *gyro)
+{
+    const extDevice_t *dev = &gyro->dev;
+
+    spiSetClkDivisor(dev, spiCalculateDivider(LSM6DSV16X_MAX_SPI_CLK_HZ));
+
+    spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_SW_RESET);
+
+    uint8_t resetAttemptsRemaining = 50;
+    while ((spiReadRegMsk(dev, LSM6DSV_CTRL3) & LSM6DSV_CTRL3_SW_RESET) && resetAttemptsRemaining--) {
+        delay(1);
+    }
+    delay(35);
+
+    // CTRL3_C (12h): BDU + IF_INC (same bit positions as LSM6DSV16X)
+    spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_IF_INC | LSM6DSV_CTRL3_BDU);
+
+    // CTRL9_XL (18h): set DEVICE_CONF=1 (bit1), preserve the other bits' reset defaults
+    // CRITICAL: must be set BEFORE ODR/FS configuration per datasheet
+    spiWriteReg(dev, LSM6DSV_CTRL9, spiReadRegMsk(dev, LSM6DSV_CTRL9) | 0x02);
+
+    // CTRL4_C (13h): LPF1_SEL_G=1, I2C_disable=1
+    // On ASM330LHH, LPF1 enable is bit 1 of CTRL4, NOT CTRL7
+    spiWriteReg(dev, LSM6DSV_CTRL4, 0x06);
+
+    // CTRL1_XL (10h): ODR=833Hz, FS_XL=±16g, LPF2=off
+    // ODR_XL[3:0]=0111(833Hz), FS_XL[1:0]=01(±16g), LPF2_XL_EN=0 → 0x74
+    spiWriteReg(dev, LSM6DSV_CTRL1, 0x74);
+
+    // CTRL2_G (11h): ODR=6667Hz, FS_G=±2000dps, FS_125=0, FS_4000=0
+    // ODR_G[3:0]=1010(6667Hz), FS_G[1:0]=11(±2000dps) → 0xAC
+    spiWriteReg(dev, LSM6DSV_CTRL2, 0xAC);
+
+    // CTRL6_G (15h): FTYPE[2:0] = LPF1 bandwidth (bits[2:0], NOT bits[6:4]!)
+    // ASM330LHH Table 53 bandwidth @6.67kHz:
+    //   FTYPE 000=297Hz, 001=223Hz, 010=154Hz, 011=470Hz
+    //   FTYPE 100-111 = NA (invalid @6.67kHz!)
+    uint8_t ftypeOptions[GYRO_HARDWARE_LPF_COUNT] = {
+            [GYRO_HARDWARE_LPF_NORMAL] = 0,      // 297Hz (closest to MPU6000's 250Hz)
+            [GYRO_HARDWARE_LPF_OPTION_1] = 2,     // 154Hz
+            [GYRO_HARDWARE_LPF_OPTION_2] = 1,     // 223Hz
+#ifdef USE_GYRO_DLPF_EXPERIMENTAL
+            [GYRO_HARDWARE_LPF_EXPERIMENTAL] = 3   // 470Hz
+#endif
+    };
+    spiWriteReg(dev, LSM6DSV_CTRL6, ftypeOptions[gyroConfig()->gyro_hardware_lpf] & 0x07);
+
+    // COUNTER_BDR_REG1 (0Bh): dataready_pulsed=1 (bit 7)
+    // Pulsed data-ready mode (75μs pulses) for reliable EXTI detection
+    spiWriteReg(dev, LSM6DSV_COUNTER_BDR_REG1, 0x80);
+
+    gyro->scale = 0.070f;
+
+    spiWriteReg(dev, LSM6DSV_INT1_CTRL, LSM6DSV_INT1_CTRL_INT1_DRDY_G);
+
+    mpuGyroInit(gyro);
+}
+
+bool scs3304SpiAccDetect(accDev_t *acc)
+{
+    if (acc->mpuDetectionResult.sensor != SCS3304_SPI) {
+        return false;
+    }
+
+    acc->initFn = lsm6dsv16xAccInit;
+    acc->readFn = lsm6dsv16xAccReadSPI;
+
+    return true;
+}
+
+bool scs3304SpiGyroDetect(gyroDev_t *gyro)
+{
+    if (gyro->mpuDetectionResult.sensor != SCS3304_SPI) {
+        return false;
+    }
+
+    gyro->initFn = scs3304GyroInit;
+    gyro->readFn = lsm6dsv16xGyroReadSPI;
+
+    return true;
+}
+
+#endif // USE_ACCGYRO_SCS3304
+
+#ifdef USE_ACCGYRO_SCS3302
+
+#define SCS3302_WHO_AM_I_CONST (0x65)
+
+uint8_t scs3302SpiDetect(const extDevice_t *dev)
+{
+    const uint8_t whoAmI = spiReadRegMsk(dev, LSM6DSV_WHO_AM_I);
+
+    if (whoAmI != SCS3302_WHO_AM_I_CONST) {
+        return MPU_NONE;
+    }
+
+    return SCS3302_SPI;
+}
+
+static void scs3302GyroInit(gyroDev_t *gyro)
+{
+    const extDevice_t *dev = &gyro->dev;
+
+    // LPF1 保持 BW_0 (~293Hz @8kHz) —— BW_[2:0]=000 是手册默认值，群延迟最小
+    // （BW_4 在 100Hz 信号上约 2-3ms 群延迟，会抵消 DRDY/BDU 优化省下的时间）
+    // 研究方向是"降低总相位延迟"，不是"降低噪声"
+    uint8_t lpf1BandwidthOptions[GYRO_HARDWARE_LPF_COUNT] = {
+            [GYRO_HARDWARE_LPF_NORMAL] = LSM6DSV_CTRL6_LPF1_G_BW_0,
+            [GYRO_HARDWARE_LPF_OPTION_1] = LSM6DSV_CTRL6_LPF1_G_BW_2,
+            [GYRO_HARDWARE_LPF_OPTION_2] = LSM6DSV_CTRL6_LPF1_G_BW_1,
+#ifdef USE_GYRO_DLPF_EXPERIMENTAL
+            [GYRO_HARDWARE_LPF_EXPERIMENTAL] = LSM6DSV_CTRL6_LPF1_G_BW_3
+#endif
+    };
+
+    spiSetClkDivisor(dev, spiCalculateDivider(LSM6DSV16X_MAX_SPI_CLK_HZ));
+
+    spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_SW_RESET);
+
+    uint8_t resetAttemptsRemaining = 50;
+    while ((spiReadRegMsk(dev, LSM6DSV_CTRL3) & LSM6DSV_CTRL3_SW_RESET) && resetAttemptsRemaining--) {
+        delay(1);
+    }
+    delay(35);
+
+    // 实验阶段 2: 关闭 BDU（block data update），改为数据连续覆盖更新
+    // 假设：BDU=1 可能在 SPI 读时序与新样本生成竞态时读到上一帧，造成相位滞后
+    //       BDU=0 让寄存器总是反映最新样本（代价：可能产生 1bit 撕裂，可忽略）
+    spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_IF_INC);
+
+    // 实验阶段 5: 降半速 @3840Hz (约4kHz)，验证 F722 CPU 是否瓶颈
+    // 若炸机是因为 MCU 无法在 125μs 内完成 EXTI+SPI+PID+Mixer，
+    // 把周期拉到 260μs 给 CPU 双倍时间 → 若消失就是 CPU 瓶颈
+    // HIGH_PERFORMANCE 仍保持（上个实验的改动）；HAODR 关闭
+    spiWriteReg(dev, LSM6DSV_HAODR_CFG, 0x00);
+
+    // 修 Bug: SCS3302 与 LSM6DSV16X 的 FS_XL 编码相差 1 位
+    //   LSM6DSV16X:  2G=0, 4G=1, 8G=2, 16G=3
+    //   SCS3302   :  4G=0, 8G=1, 16G=2, 32G=3
+    // 之前写 LSM6DSV_CTRL8_FS_XL_16G(=3) 在 SCS3302 上实际是 ±32g，但 acc_1G 按 ±16g
+    // 标定 (2048 LSB/g) → 所有 acc 值被缩成一半。
+    // 改写值 2（= LSM6DSV_CTRL8_FS_XL_8G 宏，但在 SCS3302 语义是 ±16g）。
+    // bit2 (RESDV) 是 SCS3302 保留位，须保持为 1
+    spiWriteReg(dev, LSM6DSV_CTRL8,
+                LSM6DSV_ENCODE_BITS(LSM6DSV_CTRL8_FS_XL_8G,  // value=2 → SCS3302: ±16g
+                                    LSM6DSV_CTRL8_FS_XL_MASK,
+                                    LSM6DSV_CTRL8_FS_XL_SHIFT) | 0x04);
+
+    // HIGH_PERFORMANCE mode + 480Hz accel ODR（降半速）
+    // CTRL1 = (OP_MODE_XL=0 << 4) | ODR_XL=8 = 0x08
+    spiWriteReg(dev, LSM6DSV_CTRL1, 0x08);
+
+    // HIGH_PERFORMANCE mode + 3840Hz gyro ODR（约 4kHz，降半速）
+    // CTRL2 = (OP_MODE_G=0 << 4) | ODR_G=11 = 0x0B
+    spiWriteReg(dev, LSM6DSV_CTRL2, 0x0B);
+
+    // FS_G=2000dps + LPF1 bandwidth
+    spiWriteReg(dev, LSM6DSV_CTRL6,
+                LSM6DSV_ENCODE_BITS(lpf1BandwidthOptions[gyroConfig()->gyro_hardware_lpf],
+                                    LSM6DSV_CTRL6_LPF1_G_BW_MASK,
+                                    LSM6DSV_CTRL6_LPF1_G_BW_SHIFT) |
+                LSM6DSV_ENCODE_BITS(LSM6DSV_CTRL6_FS_G_2000DPS,
+                                    LSM6DSV_CTRL6_FS_G_MASK,
+                                    LSM6DSV_CTRL6_FS_G_SHIFT));
+
+    // Enable gyro LPF1
+    spiWriteReg(dev, LSM6DSV_CTRL7, LSM6DSV_CTRL7_LPF1_G_EN);
+
+    // 实验阶段 3: DRDY 改为 latched（不写 DRDY_PULSED 位）
+    // Pulsed 模式下 DRDY 仅 65μs 高脉冲，若 EXTI 被抢占错过该窗口，
+    //   BF 要等到下一 125μs 循环才能读取 → 多 1 个采样周期的滞后。
+    // Latched 模式：DRDY 持续拉高直到高字节被读走，不会错过。
+    spiWriteReg(dev, LSM6DSV_CTRL4, 0x00);
+
+    gyro->scale = 0.070f;
+
+    // Enable INT1 for gyro data ready
+    spiWriteReg(dev, LSM6DSV_INT1_CTRL, LSM6DSV_INT1_CTRL_INT1_DRDY_G);
+
+    mpuGyroInit(gyro);
+}
+
+bool scs3302SpiAccDetect(accDev_t *acc)
+{
+    if (acc->mpuDetectionResult.sensor != SCS3302_SPI) {
+        return false;
+    }
+
+    acc->initFn = lsm6dsv16xAccInit;
+    acc->readFn = lsm6dsv16xAccReadSPI;
+
+    return true;
+}
+
+bool scs3302SpiGyroDetect(gyroDev_t *gyro)
+{
+    if (gyro->mpuDetectionResult.sensor != SCS3302_SPI) {
+        return false;
+    }
+
+    gyro->initFn = scs3302GyroInit;
+    gyro->readFn = lsm6dsv16xGyroReadSPI;
+
+    return true;
+}
+
+#endif // USE_ACCGYRO_SCS3302
+
+#endif // USE_ACCGYRO_LSM6DSV16X || USE_ACCGYRO_LSM6DSK320X || USE_ACCGYRO_SCS3304 || USE_ACCGYRO_SCS3302
