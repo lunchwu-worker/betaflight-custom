@@ -30,6 +30,7 @@
 
 #include "sensors/gyro.h"
 #include "drivers/time.h"
+#include "fc/runtime_config.h"
 
 /* See datasheet
  *
@@ -1063,8 +1064,14 @@ static void lsm6dsv16xGyroInit(gyroDev_t *gyro)
     // Perform a software reset
     spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_SW_RESET);
 
-    // Wait for the device to be ready
-    while (spiReadRegMsk(dev, LSM6DSV_CTRL3) & LSM6DSV_CTRL3_SW_RESET) {}
+    // Wait for the device to be ready, but don't let a stuck reset bit hang startup.
+    uint8_t resetAttemptsRemaining = 50;
+    while ((spiReadRegMsk(dev, LSM6DSV_CTRL3) & LSM6DSV_CTRL3_SW_RESET) && resetAttemptsRemaining--) {
+        delay(1);
+    }
+
+    // Gyro turn-on time is 30ms (datasheet)
+    delay(35);
 
     // Autoincrement register address when doing block SPI reads and update continuously
     spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_IF_INC | LSM6DSV_CTRL3_BDU);      /*BDU bit need to be set*/
@@ -1187,6 +1194,12 @@ static bool lsm6dsv16xGyroReadSPI(gyroDev_t *gyro)
         gyro->gyroADCRaw[X] = gyroData[1];
         gyro->gyroADCRaw[Y] = gyroData[2];
         gyro->gyroADCRaw[Z] = gyroData[3];
+
+        // EXTI may start after the one-shot check at first read; re-evaluate once enough
+        // interrupts arrive, but never switch mode while armed.
+        if (gyro->gyroModeSPI == GYRO_EXTI_NO_INT && gyro->detectedEXTI > GYRO_EXTI_DETECT_THRESHOLD && !ARMING_FLAG(ARMED)) {
+            gyro->gyroModeSPI = GYRO_EXTI_INIT;
+        }
         break;
     }
 
