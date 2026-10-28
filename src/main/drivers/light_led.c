@@ -63,6 +63,13 @@ void ledInit(const statusLedConfig_t *statusLedConfig)
 {
     ledInversion = statusLedConfig->inversion;
     for (int i = 0; i < (int)ARRAYLEN(leds); i++) {
+#if defined(MAX7456_DIAGNOSTIC_LEDS)
+        // PE3/PE4 are reserved for direct OSD diagnostics on this target.
+        if (i < 2) {
+            leds[i] = IO_NONE;
+            continue;
+        }
+#endif
         leds[i] = IOGetByTag(statusLedConfig->ioTags[i]);
         if (leds[i]) {
             IOInit(leds[i], OWNER_LED, RESOURCE_INDEX(i));
@@ -74,7 +81,7 @@ void ledInit(const statusLedConfig_t *statusLedConfig)
 
 void ledToggle(int led)
 {
-    if (led < 0 || led >= (int)ARRAYLEN(leds)) {
+    if (led < 0 || led >= (int)ARRAYLEN(leds) || !leds[led]) {
         return;
     }
     IOToggle(leds[led]);
@@ -82,7 +89,7 @@ void ledToggle(int led)
 
 void ledSet(int led, bool on)
 {
-    if (led < 0 || led >= (int)ARRAYLEN(leds)) {
+    if (led < 0 || led >= (int)ARRAYLEN(leds) || !leds[led]) {
         return;
     }
     const bool inverted = ledInversion & (1 << led);

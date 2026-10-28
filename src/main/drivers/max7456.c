@@ -41,9 +41,19 @@
 #include "drivers/osd_symbols.h"
 #include "drivers/time.h"
 
-// 10 MHz max SPI frequency
+// 10 MHz max SPI frequency (boards may override via config.h)
+#ifndef MAX7456_MAX_SPI_CLK_HZ
 #define MAX7456_MAX_SPI_CLK_HZ 10000000
+#endif
+#ifndef MAX7456_INIT_MAX_SPI_CLK_HZ
 #define MAX7456_INIT_MAX_SPI_CLK_HZ 5000000
+#endif
+#ifndef MAX7456_POWERUP_DELAY_MS
+#define MAX7456_POWERUP_DELAY_MS 50
+#endif
+#ifndef MAX7456_RESET_READY_TIMEOUT_MS
+#define MAX7456_RESET_READY_TIMEOUT_MS 500
+#endif
 
 // DEBUG_MAX7456_SIGNAL
 #define DEBUG_MAX7456_SIGNAL_MODEREG       0
@@ -107,6 +117,7 @@
 #define STAT_NTSC     0x02
 #define STAT_LOS      0x04
 #define STAT_NVR_BUSY 0x20
+#define STAT_RESET_BUSY 0x40
 
 #define STAT_IS_PAL(val)  ((val) & STAT_PAL)
 #define STAT_IS_NTSC(val) ((val) & STAT_NTSC)
@@ -114,6 +125,53 @@
 
 #define VIN_IS_PAL(val)  (!STAT_IS_LOS(val) && STAT_IS_PAL(val))
 #define VIN_IS_NTSC(val)  (!STAT_IS_LOS(val) && STAT_IS_NTSC(val))
+
+// Retained in the ELF for SWD inspection during startup diagnostics.
+static volatile uint8_t max7456InitStat;
+static volatile uint8_t max7456InitStat2;
+static volatile uint8_t max7456InitOsdm;
+static volatile uint8_t max7456InitVm0;
+static volatile uint8_t max7456InitDmm;
+static volatile uint8_t a7456hdGlobalClkSelReadback;
+static volatile uint8_t a7456hdHv2Readback;
+static volatile uint8_t a7456hdActenReadback;
+#ifdef USE_MS7456
+static volatile uint8_t max7456InitMsId1;
+static volatile uint8_t max7456InitMsId2;
+#endif
+static volatile uint16_t max7456InitReadyPolls;
+static volatile bool max7456InitResetTimedOut;
+
+#ifdef MAX7456_DIAGNOSTIC_LEDS
+static IO_t max7456DiagnosticReadyLed = IO_NONE;
+static IO_t max7456DiagnosticErrorLed = IO_NONE;
+
+static void max7456DiagnosticLedsInit(void)
+{
+    if (!max7456DiagnosticReadyLed) {
+        max7456DiagnosticReadyLed = IOGetByTag(IO_TAG(MAX7456_DIAGNOSTIC_LED_READY_PIN));
+        max7456DiagnosticErrorLed = IOGetByTag(IO_TAG(MAX7456_DIAGNOSTIC_LED_ERROR_PIN));
+        IOInit(max7456DiagnosticReadyLed, OWNER_OSD, 0);
+        IOInit(max7456DiagnosticErrorLed, OWNER_OSD, 1);
+        IOConfigGPIO(max7456DiagnosticReadyLed, IOCFG_OUT_PP);
+        IOConfigGPIO(max7456DiagnosticErrorLed, IOCFG_OUT_PP);
+    }
+}
+
+static void max7456DiagnosticLeds(bool ready, bool warning)
+{
+    max7456DiagnosticLedsInit();
+    // MATEKH743 status LEDs are active low.
+    IOWrite(max7456DiagnosticReadyLed, !ready);
+    IOWrite(max7456DiagnosticErrorLed, !warning);
+}
+#else
+static void max7456DiagnosticLeds(bool ready, bool warning)
+{
+    UNUSED(ready);
+    UNUSED(warning);
+}
+#endif
 
 // DMM register bits
 #define DMM_AUTO_INC 0x01
@@ -151,6 +209,13 @@
 #define MAX7456ADD_CMAL         0x0a
 #define MAX7456ADD_CMDI         0x0b
 #define MAX7456ADD_OSDM         0x0c
+#ifdef USE_MS7456
+#define MS7456ADD_ID1           0x0e
+#define MS7456ADD_ID2           0x0f
+#define MS7456_ID1              0x40
+#define MS7456_ID2              0x0a
+#endif
+#define A7456HDADD_ACTEN        0x0f
 #define MAX7456ADD_RB0          0x10
 #define MAX7456ADD_RB1          0x11
 #define MAX7456ADD_RB2          0x12
@@ -167,8 +232,14 @@
 #define MAX7456ADD_RB13         0x1d
 #define MAX7456ADD_RB14         0x1e
 #define MAX7456ADD_RB15         0x1f
+#define A7456HDADD_HV2          0x55
+#define A7456HDADD_SOFTRST      0x60
+#define A7456HDADD_GLOBAL_CLK_SEL 0x61
 #define MAX7456ADD_OSDBL        0x6c
+#define A7456HDADD_STAT2        0x8d
 #define MAX7456ADD_STAT         0xA0
+
+#define MS7456_WRITE_PROTECT_TIMEOUT_MS 200
 
 #define NVM_RAM_SIZE            54
 #define WRITE_NVR               0xA0
@@ -176,6 +247,7 @@
 // Device type
 #define MAX7456_DEVICE_TYPE_MAX 0
 #define MAX7456_DEVICE_TYPE_AT  1
+#define MAX7456_DEVICE_TYPE_MS  2
 
 #define CHARS_PER_LINE      30 // XXX Should be related to VIDEO_BUFFER_CHARS_*?
 
@@ -308,6 +380,10 @@ static void max7456ReInit(void)
         break;
     }
 
+#ifdef MAX7456_FORCE_INTERNAL_SYNC
+    videoSignalReg |= SYNC_MODE_INTERNAL;
+#endif
+
     if (videoSignalReg & VIDEO_MODE_PAL) { //PAL
         maxScreenSize = VIDEO_BUFFER_CHARS_PAL;
     } else {              // NTSC
@@ -335,6 +411,136 @@ void max7456Preinit(const max7456Config_t *max7456Config)
     ioPreinitByTag(max7456Config->csTag, max7456Config->preInitOPU ? IOCFG_OUT_PP : IOCFG_IPU, PREINIT_PIN_STATE_HIGH);
 }
 
+#ifdef USE_MS7456
+static bool ms7456ClockConfig(bool inputMode, uint16_t htotal, uint16_t pixelClock)
+{
+    static const uint8_t dividers[] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 24, 28, 36, 40, 48, 56, 72, 80, 112, 144
+    };
+    static const uint8_t dividerRegisters[] = {
+        0x00, 0x01, 0x24, 0x81, 0x40, 0xA4, 0x48, 0x82, 0x74, 0x41, 0xA5, 0xC8, 0x83,
+        0xF4, 0xC1, 0xA6, 0xC9, 0xF5, 0xC2, 0xA7, 0xCA, 0xF6, 0xC3, 0xCB, 0xF7
+    };
+    uint8_t inputSelect;
+    uint8_t inputConfig;
+    int dividerIndex;
+    uint32_t fvco = 0;
+
+    spiWriteReg(dev, 0x6E, 0x00);
+    spiWriteReg(dev, 0x6D, 0x10);
+    spiWriteReg(dev, 0x6E, 0x80);
+
+    if (inputMode) {
+        inputSelect = 0;
+        inputConfig = 0x01;
+    } else {
+        inputSelect = 0x02;
+        inputConfig = 0x09;
+        htotal = (pixelClock * 10000U / 16875U) >> 2;
+        spiWriteReg(dev, 0x7B, 0x64);
+    }
+
+    htotal--;
+    spiWriteReg(dev, 0x77, htotal);
+    spiWriteReg(dev, 0x78, htotal >> 8);
+
+    for (dividerIndex = ARRAYLEN(dividers) - 1; dividerIndex >= 0; dividerIndex--) {
+        fvco = (uint32_t)pixelClock * dividers[dividerIndex];
+        if (fvco >= 60000U && fvco < 84000U) {
+            break;
+        }
+    }
+    if (dividerIndex < 0) {
+        return false;
+    }
+
+    spiWriteReg(dev, 0x6D, inputSelect);
+    spiWriteReg(dev, 0x7C, inputConfig);
+    spiWriteReg(dev, 0x70, dividerRegisters[dividerIndex]);
+
+    const uint8_t feedbackDivider = (27000000U / 10000U) / 100U / 3U - 1U;
+    spiWriteReg(dev, 0x71, feedbackDivider);
+
+    const uint16_t loopDivider = fvco * (feedbackDivider + 1U) / (27000000U / 10000U) - 5U;
+    uint8_t htotalHigh = spiReadRegMsk(dev, 0x78) & 0x0F;
+    spiWriteReg(dev, 0x78, (loopDivider << 4) | htotalHigh);
+    spiWriteReg(dev, 0x79, loopDivider >> 4);
+
+    uint8_t postDivider;
+    if (dividers[dividerIndex] <= 7) {
+        postDivider = 1;
+    } else if (dividers[dividerIndex] <= 14) {
+        postDivider = 2;
+    } else {
+        postDivider = 3;
+    }
+    spiWriteReg(dev, 0x74, postDivider);
+    spiWriteReg(dev, 0x76, 0x2D);
+    spiWriteReg(dev, 0x75, 0x0C);
+    spiWriteReg(dev, 0x6D, 0x40 | inputSelect);
+    spiWriteReg(dev, 0x6E, 0x81);
+    delay(10);
+
+    return true;
+}
+
+static void ms7456InputSignalDetectService(void)
+{
+    // Force configuration on the first valid sample. A zero initializer would
+    // skip the first NTSC/no-signal-low state because STAT[2:0] can also be 0.
+    static uint8_t lastInputMode = UINT8_MAX;
+    static uint8_t serviceDivider;
+
+    if (!max7456DeviceDetected || ++serviceDivider < 100) {
+        return;
+    }
+    serviceDivider = 0;
+
+    spiWait(dev);
+    uint8_t inputMode = spiReadRegMsk(dev, MAX7456ADD_STAT) & 0x07;
+    if (inputMode == lastInputMode) {
+        return;
+    }
+
+    delay(10);
+    inputMode = spiReadRegMsk(dev, MAX7456ADD_STAT) & 0x07;
+    if (inputMode == lastInputMode) {
+        return;
+    }
+    lastInputMode = inputMode;
+
+    if (inputMode & STAT_LOS) {
+        return;
+    }
+
+    uint8_t vm0 = spiReadRegMsk(dev, MAX7456ADD_VM0) & ~OSD_ENABLE;
+    spiWriteReg(dev, MAX7456ADD_VM0, vm0);
+    spiWriteReg(dev, 0x7D, 0x00);
+
+    if (inputMode & STAT_PAL) {
+        vm0 |= VIDEO_MODE_PAL;
+        ms7456ClockConfig(true, 1728, 2700);
+    } else {
+        vm0 &= ~VIDEO_MODE_PAL;
+        ms7456ClockConfig(true, 1716, 2700);
+    }
+
+    spiWriteReg(dev, 0x7D, 0x01);
+    spiWriteReg(dev, MAX7456ADD_VM0, vm0 | OSD_ENABLE);
+}
+
+static bool ms7456WaitForWriteProtect(void)
+{
+    for (unsigned elapsedMs = 0; elapsedMs < MS7456_WRITE_PROTECT_TIMEOUT_MS; elapsedMs++) {
+        delay(1);
+        if (spiReadRegMsk(dev, 0x62) & 0x10) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
 // Here we init only CS and try to init MAX for first time.
 // Also detect device type (MAX v.s. AT)
 
@@ -342,6 +548,10 @@ max7456InitStatus_e max7456Init(const max7456Config_t *max7456Config, const vcdP
 {
     max7456DeviceDetected = false;
     deviceBackgroundType = DISPLAY_BACKGROUND_TRANSPARENT;
+    // Error LED stays on throughout initialization. If both LEDs remain off,
+    // this function was never entered; if only error remains on, init stalled
+    // or failed before completion.
+    max7456DiagnosticLeds(false, true);
 
     // initialize all layers
     for (unsigned i = 0; i < MAX7456_SUPPORTED_LAYER_COUNT; i++) {
@@ -351,12 +561,14 @@ max7456InitStatus_e max7456Init(const max7456Config_t *max7456Config, const vcdP
     max7456HardwareReset();
 
     if (!max7456Config->csTag || !spiSetBusInstance(dev, max7456Config->spiDevice)) {
+        max7456DiagnosticLeds(false, true);
         return MAX7456_INIT_NOT_CONFIGURED;
     }
 
     dev->busType_u.spi.csnPin = IOGetByTag(max7456Config->csTag);
 
     if (!IOIsFreeOrPreinit(dev->busType_u.spi.csnPin)) {
+        max7456DiagnosticLeds(false, true);
         return MAX7456_INIT_NOT_CONFIGURED;
     }
 
@@ -366,18 +578,42 @@ max7456InitStatus_e max7456Init(const max7456Config_t *max7456Config, const vcdP
 
     // Detect MAX7456 existence and device type. Do this at half the speed for safety.
 
-    // Detect MAX7456 and compatible device by reading OSDM (OSD Insertion MUX) register.
-    // This register is not modified in this driver, therefore ensured to remain at its default value (0x1B).
+    // Detect MAX7456 and compatible devices. MAX/AT parts are identified by
+    // the default OSDM value. MS7456 is identified by its dedicated ID
+    // registers because its initialization changes OSDM to 0x00 and that
+    // value survives an MCU-only reset.
 
     spiSetClkDivisor(dev, spiCalculateDivider(MAX7456_INIT_MAX_SPI_CLK_HZ));
 
     // Write 0xff to conclude any current SPI transaction the MAX7456 is expecting
     spiWrite(dev, END_STRING);
 
-    uint8_t osdm = spiReadRegMsk(dev, MAX7456ADD_OSDM);
+#if !defined(MAX7456_OFFICIAL_INIT_LOGIC) && !defined(USE_MS7456)
+    // Record power-on status for SWD diagnostics, but do not gate startup on
+    // STAT[6]. Some compatible devices report this bit incorrectly.
+    max7456InitStat = spiReadRegMsk(dev, MAX7456ADD_STAT);
+    max7456InitReadyPolls = 1;
+    max7456InitResetTimedOut = (max7456InitStat & STAT_RESET_BUSY) != 0;
+#endif
 
-    if (osdm != 0x1B) {
+    max7456InitOsdm = spiReadRegMsk(dev, MAX7456ADD_OSDM);
+
+    // The reference implementation first verifies the AT-style CA[8] bit,
+    // then effectively identifies MS7456 by ID1 alone. Its ID2 expression is
+    // an assignment, so the advertised 0x0A value was never a real gate.
+    spiWriteReg(dev, MAX7456ADD_CMAL, (1 << 6));
+    const bool supportsCa8 = (spiReadRegMsk(dev, MAX7456ADD_CMAL) & (1 << 6)) != 0;
+#ifdef USE_MS7456
+    max7456InitMsId1 = spiReadRegMsk(dev, MS7456ADD_ID1);
+    max7456InitMsId2 = spiReadRegMsk(dev, MS7456ADD_ID2);
+    const bool isMs7456 = supportsCa8 && max7456InitMsId1 == MS7456_ID1;
+#else
+    const bool isMs7456 = false;
+#endif
+
+    if (max7456InitOsdm != 0x1B && !isMs7456) {
         IOConfigGPIO(dev->busType_u.spi.csnPin, IOCFG_IPU);
+        max7456DiagnosticLeds(false, true);
         return MAX7456_INIT_NOT_FOUND;
     }
 
@@ -385,20 +621,21 @@ max7456InitStatus_e max7456Init(const max7456Config_t *max7456Config, const vcdP
     max7456DeviceDetected = true;
     IOInit(dev->busType_u.spi.csnPin, OWNER_OSD_CS, 0);
 
-    // Detect device type by writing and reading CA[8] bit at CMAL[6].
-    // This is a bit for accessing second half of character glyph storage, supported only by AT variant.
-
-    spiWriteReg(dev, MAX7456ADD_CMAL, (1 << 6)); // CA[8] bit
-
-    if (spiReadRegMsk(dev, MAX7456ADD_CMAL) & (1 << 6)) {
+    if (isMs7456) {
+        max7456DeviceType = MAX7456_DEVICE_TYPE_MS;
+    } else if (supportsCa8) {
         max7456DeviceType = MAX7456_DEVICE_TYPE_AT;
     } else {
         max7456DeviceType = MAX7456_DEVICE_TYPE_MAX;
     }
 
-#if defined(USE_OVERCLOCK)
-    // Determine SPI clock divisor based on config and the device type.
-
+#if defined(MAX7456_OFFICIAL_INIT_LOGIC) && !defined(USE_OVERCLOCK)
+    UNUSED(max7456Config);
+    UNUSED(cpuOverclock);
+    max7456SpiClockDiv = spiCalculateDivider(MAX7456_MAX_SPI_CLK_HZ);
+#else
+    // Determine SPI clock divisor based on config.
+    // HALF = 5 MHz, NOMINAL = 10 MHz, DOUBLE = 20 MHz.
     switch (max7456Config->clockConfig) {
     case MAX7456_CLOCK_CONFIG_HALF:
         max7456SpiClockDiv = spiCalculateDivider(MAX7456_MAX_SPI_CLK_HZ / 2);
@@ -418,27 +655,78 @@ max7456InitStatus_e max7456Init(const max7456Config_t *max7456Config, const vcdP
     DEBUG_SET(DEBUG_MAX7456_SPICLOCK, DEBUG_MAX7456_SPICLOCK_DEVTYPE, max7456DeviceType);
     DEBUG_SET(DEBUG_MAX7456_SPICLOCK, DEBUG_MAX7456_SPICLOCK_DIVISOR, max7456SpiClockDiv);
     DEBUG_SET(DEBUG_MAX7456_SPICLOCK, DEBUG_MAX7456_SPICLOCK_X100, spiCalculateClock(max7456SpiClockDiv) / 10000);
-#else
-    UNUSED(max7456Config);
-    UNUSED(cpuOverclock);
-    max7456SpiClockDiv = spiCalculateDivider(MAX7456_MAX_SPI_CLK_HZ);
 #endif
 
     spiSetClkDivisor(dev, max7456SpiClockDiv);
 
+#ifdef A7456HD_GLOBAL_SOFT_RESET
+    spiWriteReg(dev, A7456HDADD_ACTEN, 0xff);
+    spiWriteReg(dev, A7456HDADD_SOFTRST, 0x55);
+    delay(50);
+    spiWriteReg(dev, A7456HDADD_ACTEN, 0x00);
+#endif
+
     // force soft reset on Max7456
     spiWriteReg(dev, MAX7456ADD_VM0, MAX7456_RESET);
 
-    // Wait for 200us before polling for completion of reset
+    // Wait for 200us before polling for completion of reset.
     delayMicroseconds(200);
 
-    // Wait for reset to complete
-    while ((spiReadRegMsk(dev, MAX7456ADD_VM0) & MAX7456_RESET) != 0x00);
+    bool resetComplete = false;
+    for (unsigned elapsedMs = 0; elapsedMs < MAX7456_RESET_READY_TIMEOUT_MS; elapsedMs++) {
+        if ((spiReadRegMsk(dev, MAX7456ADD_VM0) & MAX7456_RESET) == 0x00) {
+            resetComplete = true;
+            break;
+        }
+        delay(1);
+    }
+    if (!resetComplete) {
+        max7456DeviceDetected = false;
+        IOConfigGPIO(dev->busType_u.spi.csnPin, IOCFG_IPU);
+        max7456DiagnosticLeds(false, true);
+        return MAX7456_INIT_NOT_FOUND;
+    }
+
+    // Capture the other status registers only after reset, without making
+    // them startup gates.
+#ifndef MAX7456_OFFICIAL_INIT_LOGIC
+    max7456InitVm0 = spiReadRegMsk(dev, MAX7456ADD_VM0);
+    max7456InitDmm = spiReadRegMsk(dev, MAX7456ADD_DMM);
+    max7456InitStat = spiReadRegMsk(dev, MAX7456ADD_STAT);
+    max7456InitStat2 = spiReadRegMsk(dev, A7456HDADD_STAT2);
+#endif
+
+#ifdef A7456HD_27MHZ_CLOCK_INIT
+    spiWriteReg(dev, A7456HDADD_ACTEN, 0xff);
+    spiWriteReg(dev, A7456HDADD_GLOBAL_CLK_SEL, 0x00);
+    spiWriteReg(dev, A7456HDADD_HV2, 0x86);
+    spiWriteReg(dev, A7456HDADD_ACTEN, 0x00);
+
+    // Re-open the extended bank only for readback verification.
+    spiWriteReg(dev, A7456HDADD_ACTEN, 0xff);
+    a7456hdGlobalClkSelReadback = spiReadRegMsk(dev, A7456HDADD_GLOBAL_CLK_SEL);
+    a7456hdHv2Readback = spiReadRegMsk(dev, A7456HDADD_HV2);
+    spiWriteReg(dev, A7456HDADD_ACTEN, 0x00);
+    a7456hdActenReadback = spiReadRegMsk(dev, A7456HDADD_ACTEN);
+#endif
 
     // Setup values to write to registers
     videoSignalCfg = pVcdProfile->video_system;
     hosRegValue = 32 - pVcdProfile->h_offset;
     vosRegValue = 16 - pVcdProfile->v_offset;
+
+#ifdef USE_MS7456
+    if (max7456DeviceType == MAX7456_DEVICE_TYPE_MS) {
+        spiWriteReg(dev, 0x5D, 0x02);
+        spiWriteReg(dev, MAX7456ADD_OSDM, 0x00);
+        spiWriteReg(dev, 0x58, 0x45);
+        spiWriteReg(dev, 0x61, 0x13);
+    }
+#endif
+
+    // Both LEDs on means the compatible part passed all functional checks,
+    // but its STAT[6] power-on-reset indication never cleared.
+    max7456DiagnosticLeds(true, max7456InitResetTimedOut);
 
     // Real init will be made later when driver detect idle.
     return MAX7456_INIT_OK;
@@ -608,6 +896,8 @@ bool max7456ReInitIfRequired(bool forceStallCheck)
         lastSigCheckMs = nowMs;
     }
 
+    max7456DiagnosticLeds(max7456DeviceDetected && !stalled, max7456InitResetTimedOut || stalled);
+
     return stalled;
 }
 
@@ -630,6 +920,64 @@ bool max7456DrawScreen(void)
             {.u.link = {NULL, NULL}, 0, true, max7456_callbackReady},
             {.u.link = {NULL, NULL}, 0, true, NULL},
     };
+
+#ifdef USE_MS7456
+    if (max7456DeviceType == MAX7456_DEVICE_TYPE_MS) {
+        if (fontIsLoading) {
+            return false;
+        }
+        if (spiIsBusy(dev)) {
+            return true;
+        }
+
+        ms7456InputSignalDetectService();
+        uint8_t *buffer = getActiveLayerBuffer();
+
+        for (uint16_t index = 0; index < maxScreenSize; index++) {
+            if (buffer[index] == shadowBuffer[index]) {
+                continue;
+            }
+            if (buffer[index] == 0xff) {
+                buffer[index] = ' ';
+            }
+
+            // MS7456 requires separate SPI transactions and OSD gating for
+            // every display-memory write.
+            const uint8_t vm0 = spiReadRegMsk(dev, MAX7456ADD_VM0);
+            spiWriteReg(dev, MAX7456ADD_VM0, vm0 & ~OSD_ENABLE);
+            spiWriteReg(dev, MAX7456ADD_DMAH, index >> 8);
+            spiWriteReg(dev, MAX7456ADD_DMAL, index & 0xff);
+            spiWriteReg(dev, MAX7456ADD_DMDI, buffer[index]);
+            shadowBuffer[index] = buffer[index];
+            spiWriteReg(dev, MAX7456ADD_VM0, vm0 | OSD_ENABLE);
+        }
+
+        return false;
+    }
+#endif
+
+#ifdef MAX7456_FORCE_SINGLE_REGISTER_WRITES
+    if (!fontIsLoading) {
+        uint8_t *buffer = getActiveLayerBuffer();
+
+        for (uint16_t index = 0; index < maxScreenSize; index++) {
+            if (buffer[index] == shadowBuffer[index]) {
+                continue;
+            }
+            if (buffer[index] == 0xff) {
+                buffer[index] = ' ';
+            }
+
+            spiWriteReg(dev, MAX7456ADD_DMM, displayMemoryModeReg);
+            spiWriteReg(dev, MAX7456ADD_DMAH, index >> 8);
+            spiWriteReg(dev, MAX7456ADD_DMAL, index & 0xff);
+            spiWriteReg(dev, MAX7456ADD_DMDI, buffer[index]);
+            shadowBuffer[index] = buffer[index];
+        }
+    }
+
+    return false;
+#endif
 
     if (!fontIsLoading) {
         uint8_t *buffer = getActiveLayerBuffer();
@@ -752,6 +1100,18 @@ bool max7456WriteNvm(uint8_t char_address, const uint8_t *font_data)
     fontIsLoading = true;
     spiWriteReg(dev, MAX7456ADD_VM0, 0);
 
+#ifdef USE_MS7456
+    if (max7456DeviceType == MAX7456_DEVICE_TYPE_MS) {
+        spiWriteReg(dev, 0x5D, 0x03);
+        spiWriteReg(dev, 0x64, 0x00);
+        spiWriteReg(dev, 0x62, 0x02);
+        if (!ms7456WaitForWriteProtect()) {
+            spiWriteReg(dev, 0x5D, 0x02);
+            return false;
+        }
+    }
+#endif
+
     spiWriteReg(dev, MAX7456ADD_CMAH, char_address); // set start address high
 
     for (int x = 0; x < 54; x++) {
@@ -772,6 +1132,18 @@ bool max7456WriteNvm(uint8_t char_address, const uint8_t *font_data)
 
     while ((spiReadRegMsk(dev, MAX7456ADD_STAT) & STAT_NVR_BUSY) != 0x00);
 
+#ifdef USE_MS7456
+    if (max7456DeviceType == MAX7456_DEVICE_TYPE_MS) {
+        spiWriteReg(dev, 0x64, 0x9C);
+        spiWriteReg(dev, 0x62, 0x02);
+        if (!ms7456WaitForWriteProtect()) {
+            spiWriteReg(dev, 0x5D, 0x02);
+            return false;
+        }
+        spiWriteReg(dev, 0x5D, 0x02);
+    }
+#endif
+
     return true;
 }
 
@@ -788,14 +1160,15 @@ void max7456HardwareReset(void)
     IOInit(max7456ResetPin, OWNER_OSD, 0);
     IOConfigGPIO(max7456ResetPin, IO_RESET_CFG);
 
-    // RESET 50ms long pulse, followed by 100us pause
+    // RESET 50ms long pulse, followed by the device power-up delay.
     IOLo(max7456ResetPin);
     delay(50);
     IOHi(max7456ResetPin);
-    delayMicroseconds(100);
+    delay(MAX7456_POWERUP_DELAY_MS);
 #else
-    // Allow device 50ms to powerup
-    delay(50);
+    // Allow the power supplies and 27MHz oscillator to stabilise before the
+    // first SPI access. Some compatible devices need more than 50ms.
+    delay(MAX7456_POWERUP_DELAY_MS);
 #endif
 }
 

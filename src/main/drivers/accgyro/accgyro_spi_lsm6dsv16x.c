@@ -1282,9 +1282,9 @@ static void scs3304GyroInit(gyroDev_t *gyro)
     // CTRL3_C (12h): BDU + IF_INC (same bit positions as LSM6DSV16X)
     spiWriteReg(dev, LSM6DSV_CTRL3, LSM6DSV_CTRL3_IF_INC | LSM6DSV_CTRL3_BDU);
 
-    // CTRL9_XL (18h): set DEVICE_CONF=1 (bit1), preserve DEN defaults (0xE0)
+    // CTRL9_XL (18h): set DEVICE_CONF=1 (bit1), preserve the other bits' reset defaults
     // CRITICAL: must be set BEFORE ODR/FS configuration per datasheet
-    spiWriteReg(dev, LSM6DSV_CTRL9, 0xE2);
+    spiWriteReg(dev, LSM6DSV_CTRL9, spiReadRegMsk(dev, LSM6DSV_CTRL9) | 0x02);
 
     // CTRL4_C (13h): LPF1_SEL_G=1, I2C_disable=1
     // On ASM330LHH, LPF1 enable is bit 1 of CTRL4, NOT CTRL7
@@ -1407,10 +1407,11 @@ static void scs3302GyroInit(gyroDev_t *gyro)
     // 之前写 LSM6DSV_CTRL8_FS_XL_16G(=3) 在 SCS3302 上实际是 ±32g，但 acc_1G 按 ±16g
     // 标定 (2048 LSB/g) → 所有 acc 值被缩成一半。
     // 改写值 2（= LSM6DSV_CTRL8_FS_XL_8G 宏，但在 SCS3302 语义是 ±16g）。
+    // bit2 (RESDV) 是 SCS3302 保留位，须保持为 1
     spiWriteReg(dev, LSM6DSV_CTRL8,
                 LSM6DSV_ENCODE_BITS(LSM6DSV_CTRL8_FS_XL_8G,  // value=2 → SCS3302: ±16g
                                     LSM6DSV_CTRL8_FS_XL_MASK,
-                                    LSM6DSV_CTRL8_FS_XL_SHIFT));
+                                    LSM6DSV_CTRL8_FS_XL_SHIFT) | 0x04);
 
     // HIGH_PERFORMANCE mode + 480Hz accel ODR（降半速）
     // CTRL1 = (OP_MODE_XL=0 << 4) | ODR_XL=8 = 0x08
