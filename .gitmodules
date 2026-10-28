@@ -1,6 +1,6 @@
 [submodule "config"]
 	path = src/config
-	url = https://github.com/Lunch-wu/betaflight-config-custom.git
+	url = https://github.com/lunchwu-worker/betaflight-config-custom.git
 	branch = local-custom-configs
 	ignore = dirty
 [submodule "lib/main/pico-sdk"]
